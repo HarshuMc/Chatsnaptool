@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Mobile-first Real-time Chat (Firebase RTDB)</title>
+<link rel="preconnect" href="https://fonts.gstatic.com">
+<style>
+  /* Mobile-first / WhatsApp-style layout + dark theme */
+  :root{
+    --bg:#0b1220; --panel:#0f1724; --accent:#5865f2; --muted:#9aa4b2;
+    --glass: rgba(255,255,255,0.02);
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial;color:#e6eef8;background:
+    radial-gradient(600px 240px at 0% -10%, rgba(88,101,242,0.06), transparent),
+    linear-gradient(180deg,var(--bg),#05111a)}
+  /* app */
+  .app{height:100vh;display:flex;flex-direction:column}
+  /* top bar */
+  .topbar{display:flex;align-items:center;gap:10px;padding:10px;border-bottom:1px solid rgba(255,255,255,0.03);background:linear-gradient(180deg,rgba(255,255,255,0.01),transparent)}
+  .hamburger{width:40px;height:40px;border-radius:8px;background:transparent;border:1px solid rgba(255,255,255,0.03);display:flex;align-items:center;justify-content:center;cursor:pointer}
+  .brand{font-weight:700}
+  .top-actions{margin-left:auto;display:flex;gap:8px}
+  .btn{padding:8px 10px;border-radius:8px;border:none;background:var(--accent);color:white;cursor:pointer}
+  .btn-ghost{padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:var(--accent);cursor:pointer}
+  /* main area */
+  .main-outer{display:flex;flex:1;min-height:0} /* min-height:0 lets children scroll properly */
+  /* left pane (list) */
+  .left-pane{width:320px;background:transparent;border-right:1px solid rgba(255,255,255,0.02);display:flex;flex-direction:column;gap:8px;padding:10px}
+  .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));padding:10px;border-radius:12px;border:1px solid rgba(255,255,255,0.03)}
+  .search{display:flex;gap:8px;align-items:center}
+  .search input{flex:1;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:inherit}
+  .section-title{font-size:12px;color:var(--muted);margin:6px 0}
+  .list{overflow:auto;display:flex;flex-direction:column;gap:8px;padding-right:6px;max-height:calc(100vh - 260px)}
+  .list-item{display:flex;gap:10px;align-items:center;padding:8px;border-radius:10px;cursor:pointer;transition:all .12s}
+  .list-item:hover{transform:translateX(6px);background:var(--glass)}
+  .pfp{width:48px;height:48px;border-radius:10px;object-fit:cover;flex:0 0 48px}
+  .meta{min-width:0}
+  .name{font-weight:700}
+  .muted{color:var(--muted);font-size:13px}
+  .small{font-size:12px;color:var(--muted)}
+  /* right pane (chat view) */
+  .chat-pane{flex:1;display:flex;flex-direction:column;min-width:0;padding:10px;gap:8px}
+  .chat-header{display:flex;align-items:center;gap:10px;padding:8px}
+  .chat-header .title{font-weight:700}
+  .messages{flex:1;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:10px;border-radius:10px;background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent)}
+  .bubble{max-width:78%;padding:10px;border-radius:10px;background:rgba(255,255,255,0.03);word-break:break-word}
+  .bubble.me{margin-left:auto;background:linear-gradient(180deg, rgba(88,101,242,0.16), rgba(88,101,242,0.08))}
+  .bubble .meta{font-size:12px;color:var(--muted);margin-bottom:6px}
+  .composer{display:flex;gap:8px;padding:8px}
+  .composer input{flex:1;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:inherit}
+  .members-panel{width:260px;display:flex;flex-direction:column;gap:8px}
+  .member-item{display:flex;gap:8px;align-items:center;padding:8px;border-radius:8px}
+  /* overlay */
+  .overlay{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(2,6,23,0.6);z-index:9999;padding:12px}
+  .overlay .modal{width:520px;max-width:100%;padding:12px;border-radius:10px}
+  /* responsive: mobile-first behavior */
+  @media (max-width:900px){
+    .left-pane{position:fixed;left:0;top:56px;background:var(--panel);height:calc(100vh - 56px);z-index:60;transform:translateX(-110%);transition:transform .18s;box-shadow: 8px 0 30px rgba(0,0,0,0.6)}
+    .left-pane.open{transform:translateX(0)}
+    .members-panel{display:none} /* hide members panel on mobile */
+    .chat-pane{padding:8px}
+  }
+  /* small niceties */
+  .hidden{display:none !important}
+  .muted-ghost{color:rgba(255,255,255,0.06)}
+  .center{display:flex;align-items:center;justify-content:center}
+</style>
+</head>
+<body>
+  <div class="app">
+    <!-- top bar -->
+    <div class="topbar">
+      <div class="hamburger" id="hamb"><svg width="18" height="12" viewBox="0 0 18 12" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="18" height="2" rx="1" fill="#e6eef8"/><rect y="5" width="18" height="2" rx="1" fill="#e6eef8"/><rect y="10" width="18" height="2" rx="1" fill="#e6eef8"/></svg></div>
+      <div class="brand">ChatApp</div>
+      <div class="top-actions">
+        <button id="btnNew" class="btn-ghost">New</button>
+      </div>
+    </div>
+
+    <div class="main-outer">
+      <!-- left pane: lists -->
+      <aside class="left-pane card" id="leftPane">
+        <div class="card">
+          <div class="search">
+            <input id="searchInput" placeholder="Search users or groups..." />
+            <button id="btnSearch" class="btn-ghost">Go</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div class="section-title">Chats</div>
+            <div><button id="btn" class="btn-ghost">Lobby</button></div>
+          </div>
+          <div class="section-title">Direct Messages</div>
+          <div id="dmList" class="list"></div>
+        </div>
+
+        <div class="card">
+          <div class="section-title">Groups</div>
+          <div id="groupList" class="list"></div>
+          <div style="margin-top:8px;display:flex;gap:8px">
+            <button id="btnNewGroup" class="btn-ghost">New Group</button>
+            <button id="btnMyGroups" class="btn-ghost">My Groups</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div style="display:flex;gap:10px;align-items:center">
+            <img id="myPfp" src="https://via.placeholder.com/48?text=PF" class="pfp" alt="me">
+            <div>
+              <div id="myName" class="name">You</div>
+              <div id="myEmail" class="small muted">you@example.com</div>
+            </div>
+            <div style="margin-left:auto;display:flex;gap:8px">
+              <button id="btnProfile" class="btn-ghost">Profile</button>
+              <button id="btnLogout" class="btn-ghost">Logout</button>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- chat pane -->
+      <main class="chat-pane">
+        <div class="card chat-header">
+          <img id="chatPfp" class="pfp" src="https://www.pngall.com/wp-content/uploads/19/Minecraft-Text-Bubble-Iconic-Representation-PNG.png" alt="">
+          <div>
+            <div class="title" id="chatTitle">Lobby</div>
+            <div class="muted small" id="chatSubtitle">Public</div>
+          </div>
+          <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+            <div id="typingIndicator" class="muted small hidden">typing...</div>
+            <button id="btnAddMember" class="btn-ghost hidden">Add</button>
+          </div>
+        </div>
+
+        <div id="messages" class="messages card center">
+          <div class="muted">Loading messages…</div>
+        </div>
+
+        <div class="card composer">
+          <input id="messageInput" placeholder="Type a message" autocomplete="off" />
+          <button id="btnSend" class="btn">Send</button>
+        </div>
+      </main>
+
+      <!-- members (desktop only) -->
+      <aside class="members-panel card hidden" id="membersPanel">
+        <div class="small muted">Members</div>
+        <div id="membersList" style="display:flex;flex-direction:column;gap:8px;margin-top:8px;overflow:auto;max-height:60vh"></div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- overlay modal -->
+  <div id="overlay" class="overlay"><div class="modal card" id="overlayCard"></div></div>
+
+  <!-- Firebase SDKs (compat) -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
+
+  <script>
+  /***** PASTE YOUR FIREBASE CONFIG BELOW *****/
+  const firebaseConfig = {
+  apiKey: "AIzaSyBZ2AAPXoAi7gB-gZQI40Jh-NFJ50s7Km0",
+  authDomain: "snaptool-chat.firebaseapp.com",
+  databaseURL: "https://snaptool-chat-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "snaptool-chat",
+  storageBucket: "snaptool-chat.firebasestorage.app",
+  messagingSenderId: "613480681875",
+  appId: "1:613480681875:web:86996964bdc4b20dbad866",
+  measurementId: "G-VB7VLED1MM"
+};
+  if(!firebaseConfig || !firebaseConfig.apiKey){
+    document.getElementById('overlayCard').innerHTML = '<h3 style="color:#fff">Firebase config missing</h3><div class="muted">Paste your Firebase web config into the firebaseConfig object at top of the file.</div>';
+    document.getElementById('overlay').style.display = 'flex';
+    throw new Error('Firebase config missing');
+  }
+  firebase.initializeApp(firebaseConfig);
+  const auth = firebase.auth();
+  const db = firebase.database();
+  /*********************************************/
+
+  /* --------- Small helpers --------- */
+  const $ = id => document.getElementById(id);
+  function esc(s){ if(!s) return ''; return String(s).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
+  function uidPair(a,b){ return [a,b].sort().join('_'); } // used for DM id
+  function dmId(a,b){ return 'dm_' + uidPair(a,b); }
+  function to12(ts){ const d = new Date(ts||Date.now()); let h=d.getHours(), m=d.getMinutes().toString().padStart(2,'0'); const ap = h>=12?'PM':'AM'; h = h%12 || 12; return `${h}:${m} ${ap}`; }
+  function showOverlay(html){ $('overlayCard').innerHTML = html; $('overlay').style.display = 'flex'; }
+  function closeOverlay(){ $('overlay').style.display = 'none'; $('overlayCard').innerHTML = ''; }
+
+  /* --------- App state --------- */
+  let me = null;               // {uid,email,displayName,about,pfp}
+  let currentChat = 'lobby';   // 'lobby' | 'dm_<pair>' | 'group_<gid>'
+  let msgRef = null;
+  let typingTimer = null;
+
+  /* --------- Auth UI: prompt login/register (modal) --------- */
+  auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(e=>console.warn('persistence', e));
+  function showAuth(){
+    const html = `<h3>Sign in / Register</h3>
+      <label>Email</label><input id="authEmail" type="email" placeholder="you@example.com" />
+      <label>Password</label><input id="authPass" type="password" placeholder="min 6 chars" />
+      <div style="display:flex;gap:8px;margin-top:8px"><button id="doLogin" class="btn">Login</button><button id="doRegister" class="btn-ghost">Register</button></div>
+      <div id="authErr" class="muted small" style="margin-top:8px"></div>`;
+    showOverlay(html);
+    $('doLogin').onclick = ()=> {
+      const e = $('authEmail').value.trim(), p = $('authPass').value;
+      if(!e||!p){ $('authErr').innerText = 'Fill both fields'; return; }
+      auth.signInWithEmailAndPassword(e,p).catch(err=> $('authErr').innerText = err.message);
+    };
+    $('doRegister').onclick = ()=> {
+      const e = $('authEmail').value.trim(), p = $('authPass').value;
+      if(!e||!p){ $('authErr').innerText = 'Fill both fields'; return; }
+      if(p.length < 6){ $('authErr').innerText = 'Password must be >= 6 chars'; return; }
+      auth.createUserWithEmailAndPassword(e,p).then(cred=>{
+        const display = e.split('@')[0];
+        db.ref('users/'+cred.user.uid).set({ email: e, displayName: display, about:'', pfp:'', createdAt:Date.now(), status:'online' });
+        closeOverlay();
+      }).catch(err=> $('authErr').innerText = err.message);
+    };
+  }
+
+  auth.onAuthStateChanged(user => {
+    if(user){
+      // load profile
+      db.ref('users/'+user.uid).once('value').then(snap=>{
+        const d = snap.val() || {};
+        me = { uid: user.uid, email: user.email, displayName: d.displayName || user.email.split('@')[0], about: d.about||'', pfp: d.pfp||'' };
+        $('myName').innerText = me.displayName; $('myEmail').innerText = me.email; $('myPfp').src = me.pfp || 'https://via.placeholder.com/48?text=PF';
+        closeOverlay();
+        db.ref('users/'+me.uid+'/status').set('online');
+        db.ref('users/'+me.uid+'/status').onDisconnect().set('offline');
+        initApp();
+      });
+    } else {
+      showAuth();
+    }
+  });
+
+  /* --------- UI init --------- */
+  function initApp(){
+    wireUI();
+    loadDMs();
+    loadGroups();
+    openChat('lobby');
+    // small UX: close left pane on mobile by default
+    if(window.innerWidth <= 900) $('leftPane').classList.remove('open');
+  }
+
+  function wireUI(){
+    $('hamb').onclick = ()=> $('leftPane').classList.toggle('open');
+    $('btnLogout').onclick = ()=> auth.signOut().then(()=> location.reload());
+    $('btnProfile').onclick = openMyProfile;
+    $('btnLobby').onclick = ()=> openChat('lobby');
+    $('btnNewGroup').onclick = promptNewGroup;
+    $('btnMyGroups').onclick = showMyGroups;
+    $('btnNew').onclick = ()=> showQuickMenu();
+    $('btnSend').onclick = sendMessage;
+    $('messageInput').addEventListener('input', ()=> setTyping(true));
+    $('messageInput').addEventListener('keydown', e=>{ if(e.key==='Enter') sendMessage(); });
+  }
+
+  /* --------- DM Index (dmIndex/{uid}/{dmId}) --------- */
+  function loadDMs(){
+    db.ref('dmIndex/'+me.uid).on('value', snap=>{
+      const el = $('dmList'); el.innerHTML = '';
+      snap.forEach(child=>{
+        const id = child.key, m = child.val() || {};
+        const div = document.createElement('div'); div.className = 'list-item';
+        div.innerHTML = `<img src="${esc(m.pfp||'https://via.placeholder.com/48?text=PF')}" class="pfp"><div class="meta"><div class="name">${esc(m.title||'DM')}</div><div class="muted small">${esc((m.lastText||'').slice(0,40))}</div></div>`;
+        div.onclick = ()=> { openChat(id); if(window.innerWidth<=900) $('leftPane').classList.remove('open'); };
+        el.appendChild(div);
+      });
+    });
+  }
+
+  /* --------- Groups (groups/{gid}) --------- */
+  function loadGroups(){
+    db.ref('groups').on('value', snap=>{
+      const el = $('groupList'); el.innerHTML = '';
+      snap.forEach(child=>{
+        const gid = child.key, g = child.val()||{};
+        const div = document.createElement('div'); div.className='list-item';
+        div.innerHTML = `<img src="${esc(g.pfp||'https://via.placeholder.com/48?text=G')}" class="pfp"><div class="meta"><div class="name">${esc(g.name)}</div><div class="muted small">${g.private? 'Private':'Public'} · ${(g.members||[]).length} members</div></div>`;
+        div.onclick = ()=> { openChat('group_'+gid); if(window.innerWidth<=900) $('leftPane').classList.remove('open'); };
+        el.appendChild(div);
+      });
+    });
+  }
+
+  /* --------- create DM (by email) --------- */
+  function promptNewDM(){
+    const email = prompt('Email of user to DM (exact):'); if(!email) return;
+    db.ref('users').orderByChild('email').equalTo(email).once('value').then(snap=>{
+      if(!snap.exists()) return alert('User not found');
+      const uid = Object.keys(snap.val())[0]; createOrOpenDM(uid);
+    });
+  }
+  function createOrOpenDM(otherUid){
+    if(otherUid === me.uid) return alert('Cannot DM yourself');
+    const id = dmId(me.uid, otherUid);
+    db.ref('users/'+otherUid).once('value').then(snap=>{
+      const other = snap.val()||{};
+      db.ref('dmIndex/'+me.uid+'/'+id).update({ title: other.displayName||other.email, pfp: other.pfp||'', lastTime: Date.now() });
+      db.ref('dmIndex/'+otherUid+'/'+id).update({ title: me.displayName, pfp: me.pfp||'', lastTime: Date.now() });
+      openChat(id);
+    });
+  }
+
+  /* --------- create group --------- */
+  function promptNewGroup(){
+    const name = prompt('Group name:'); if(!name) return;
+    const isPrivate = confirm('Make private? Only invited members see & post.');
+    const gid = 'g_' + Date.now().toString(36);
+    const groupObj = { name: name, pfp:'', private: !!isPrivate, members: [me.uid], createdBy: me.uid, createdAt: Date.now() };
+    db.ref('groups/'+gid).set(groupObj).then(()=> {
+      db.ref('groupIndex/'+me.uid+'/group_'+gid).set({ title: name, pfp:'', lastTime: Date.now() });
+      openChat('group_'+gid);
+    });
+  }
+
+  function showMyGroups(){
+    db.ref('groups').once('value').then(snap=>{
+      const my = [];
+      snap.forEach(child=>{
+        const gid = child.key, g = child.val()||{};
+        if((g.members||[]).includes(me.uid)) my.push({gid,g});
+      });
+      if(!my.length) return alert('You are not in any groups');
+      let html = '<h3>Your Groups</h3>';
+      my.forEach(it => html += `<div style="padding:8px;border-radius:8px;background:${'transparent'};margin:8px 0"><b>${esc(it.g.name)}</b><div class="muted small">${(it.g.members||[]).length} members</div><div style="margin-top:8px"><button onclick="openChat('+"'group_"+it.gid+"'"+')">Open</button></div></div>`);
+      showOverlay(html);
+    });
+  }
+
+  /* --------- open chat (lobby, dm, group) --------- */
+  function openChat(chatId){
+    // detach previous listener
+    if(msgRef) msgRef.off();
+    $('messages').innerHTML = '<div class="muted center">Loading…</div>';
+    currentChat = chatId;
+    $('btnAddMember').classList.add('hidden');
+    // choose path
+    if(chatId === 'lobby'){
+      $('chatTitle').innerText = 'Lobby'; $('chatSubtitle').innerText = 'Public';
+      $('chatPfp').src = 'https://via.placeholder.com/44?text=L';
+      msgRef = db.ref('chats/lobby');
+      msgRef.on('child_added', snap => appendMsg(snap.val()));
+      listenTyping('typing/lobby');
+      renderMembers([]);
+    } else if(chatId.startsWith('dm_')){
+      const otherUid = chatId.replace('dm_','').split('_').filter(x=>x!==me.uid)[0];
+      db.ref('users/'+otherUid).once('value').then(snap=>{
+        const u = snap.val()||{};
+        $('chatTitle').innerText = u.displayName || u.email; $('chatSubtitle').innerText = '@' + (u.email||'');
+        $('chatPfp').src = u.pfp || 'https://via.placeholder.com/44?text=U';
+        renderMembers([otherUid, me.uid]);
+      });
+      msgRef = db.ref('chats/private/'+chatId);
+      msgRef.on('child_added', snap => appendMsg(snap.val()));
+      listenTyping('typing/private/'+chatId);
+    } else if(chatId.startsWith('group_')){
+      const gid = chatId.replace('group_','');
+      db.ref('groups/'+gid).once('value').then(snap=>{
+        const g = snap.val()||{};
+        if(g.private && !((g.members||[]).includes(me.uid))){ alert('Private group — you are not a member'); $('messages').innerHTML=''; return; }
+        $('chatTitle').innerText = g.name || 'Group'; $('chatSubtitle').innerText = g.private ? 'Private group' : 'Public group';
+        $('chatPfp').src = g.pfp || 'https://via.placeholder.com/44?text=G';
+        if((g.members||[]).includes(me.uid)) $('btnAddMember').classList.remove('hidden');
+        renderMembers(g.members || []);
+      });
+      msgRef = db.ref('chats/group/'+gid);
+      msgRef.on('child_added', snap => appendMsg(snap.val()));
+      listenTyping('typing/group/'+gid);
+    }
+    // close left pane on mobile
+    if(window.innerWidth <= 900) $('leftPane').classList.remove('open');
+  }
+
+  /* --------- append message --------- */
+  function appendMsg(m){
+    const container = $('messages');
+    // remove "loading" placeholder
+    if(container.querySelector('.center')) container.innerHTML = '';
+    const div = document.createElement('div'); div.className = 'bubble' + (m.uid === me.uid ? ' me' : '');
+    const time = to12(m.ts);
+    const name = esc(m.displayName || m.email || 'Unknown');
+    div.innerHTML = `<div class="meta"><b>${name}</b> <span class="muted small" style="margin-left:8px">${time}</span></div><div>${esc(m.text||'')}</div>`;
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+  }
+
+  /* --------- send message --------- */
+  function sendMessage(){
+    const t = $('messageInput').value.trim(); if(!t) return;
+    const payload = { uid: me.uid, displayName: me.displayName, email: me.email, text: t, ts: Date.now() };
+    if(currentChat === 'lobby') db.ref('chats/lobby').push(payload);
+    else if(currentChat.startsWith('dm_')) db.ref('chats/private/'+currentChat).push(payload);
+    else if(currentChat.startsWith('group_')) {
+      const gid = currentChat.replace('group_','');
+      // verify membership client-side
+      db.ref('groups/'+gid+'/members').once('value').then(snap=>{
+        const arr = snap.val()||[];
+        if(!arr.includes(me.uid)){ alert('You are not a member'); return; }
+        db.ref('chats/group/'+gid).push(payload);
+      });
+    }
+    $('messageInput').value = '';
+    setTyping(false);
+  }
+
+  /* --------- typing indicator --------- */
+  function setTyping(state){
+    if(!me) return;
+    let path;
+    if(currentChat === 'lobby') path = 'typing/lobby';
+    else if(currentChat.startsWith('dm_')) path = 'typing/private/'+currentChat;
+    else if(currentChat.startsWith('group_')) path = 'typing/group/'+currentChat.replace('group_','');
+    if(state){
+      db.ref(path+'/'+me.uid).set(true);
+      if(typingTimer) clearTimeout(typingTimer);
+      typingTimer = setTimeout(()=> setTyping(false), 1500);
+    } else {
+      db.ref(path+'/'+me.uid).remove();
+    }
+  }
+  function listenTyping(path){
+    db.ref(path).on('value', snap=>{
+      const obj = snap.val() || {};
+      const others = Object.keys(obj).filter(k=>k!==me.uid);
+      if(others.length) $('typingIndicator').classList.remove('hidden'); else $('typingIndicator').classList.add('hidden');
+    });
+  }
+
+  /* --------- render members panel --------- */
+  function renderMembers(uids){
+    const el = $('membersList'); el.innerHTML = '';
+    (uids||[]).forEach(uid=>{
+      db.ref('users/'+uid).once('value').then(snap=>{
+        const u = snap.val()||{};
+        const node = document.createElement('div'); node.className='member-item';
+        node.innerHTML = `<img class="pfp" src="${esc(u.pfp||'https://via.placeholder.com/48?text=PF')}"><div style="min-width:0"><div style="font-weight:700">${esc(u.displayName||u.email)}</div><div class="muted small">${esc(u.email)}</div></div><div style="margin-left:auto"><button class="btn-ghost" onclick="openProfile('${uid}')">View</button></div>`;
+        el.appendChild(node);
+      });
+    });
+  }
+
+  /* --------- profiles: view & edit (PFP via URL) --------- */
+  function openMyProfile(){ openProfile(me.uid); }
+  function openProfile(uid){
+    db.ref('users/'+uid).once('value').then(snap=>{
+      const u = snap.val()||{};
+      const isMe = uid === me.uid;
+      let html = `<div style="display:flex;gap:12px;align-items:center"><img src="${esc(u.pfp||'https://via.placeholder.com/72?text=PF')}" style="width:72px;height:72px;border-radius:10px;object-fit:cover"><div><div style="font-weight:700">${esc(u.displayName||u.email)}</div><div class="muted">${esc(u.email)}</div></div></div><hr/><div class="muted small">About</div><div style="margin-bottom:8px">${esc(u.about||'—')}</div>`;
+      if(isMe) html += `<div style="display:flex;gap:8px"><button id="editProfileBtn" class="btn">Edit</button><button class="btn-ghost" onclick="closeOverlay()">Close</button></div>`;
+      else html += `<div style="display:flex;gap:8px"><button id="dmBtn" class="btn">Message</button><button class="btn-ghost" onclick="closeOverlay()">Close</button></div>`;
+      showOverlay(html);
+      if(isMe) $('editProfileBtn').onclick = ()=> editProfileForm(uid);
+      else $('dmBtn').onclick = ()=> { createOrOpenDM(uid); closeOverlay(); };
+    });
+  }
+
+  function editProfileForm(uid){
+    db.ref('users/'+uid).once('value').then(snap=>{
+      const u = snap.val()||{};
+      const html = `<div style="display:flex;gap:12px;align-items:center"><img id="pfpPreview" src="${esc(u.pfp||'https://via.placeholder.com/72?text=PF')}" style="width:72px;height:72px;border-radius:10px;object-fit:cover"><div><div style="font-weight:700">${esc(u.email)}</div><div class="muted small">Edit profile</div></div></div><hr/>
+        <label>Display name</label><input id="profileDisplay" value="${esc(u.displayName||'')}" />
+        <label>About</label><textarea id="profileAbout">${esc(u.about||'')}</textarea>
+        <label>PFP Image URL</label><input id="profilePfpUrl" placeholder="https://..." value="${esc(u.pfp||'')}" />
+        <div style="display:flex;gap:8px;margin-top:8px"><button id="saveProfile" class="btn">Save</button><button class="btn-ghost" id="cancelProfile">Cancel</button></div>`;
+      showOverlay(html);
+      $('cancelProfile').onclick = closeOverlay;
+      $('saveProfile').onclick = ()=> {
+        const updates = { displayName: $('profileDisplay').value.trim(), about: $('profileAbout').value.trim(), pfp: $('profilePfpUrl').value.trim() };
+        db.ref('users/'+me.uid).update(updates).then(()=> {
+          db.ref('users/'+me.uid).once('value').then(s=>{ const d=s.val()||{}; me.displayName=d.displayName||me.displayName; me.pfp=d.pfp||me.pfp; $('myName').innerText = me.displayName; $('myPfp').src = me.pfp||'https://via.placeholder.com/48?text=PF'; closeOverlay(); alert('Saved'); });
+        }).catch(e=>alert('Save failed: '+e.message));
+      };
+    });
+  }
+
+  /* --------- add member to group (by email) --------- */
+  $('btnAddMember').onclick = ()=> {
+    if(!currentChat.startsWith('group_')) return;
+    const gid = currentChat.replace('group_','');
+    const email = prompt('Email to add:'); if(!email) return;
+    db.ref('users').orderByChild('email').equalTo(email).once('value').then(snap=>{
+      if(!snap.exists()) return alert('User not found');
+      const uid = Object.keys(snap.val())[0];
+      db.ref('groups/'+gid).once('value').then(gsnap=>{
+        const g = gsnap.val()||{};
+        if(g.private && !((g.members||[]).includes(me.uid))) return alert('Not allowed to add members');
+        const members = g.members || [];
+        if(members.includes(uid)) return alert('Already member');
+        members.push(uid);
+        db.ref('groups/'+gid+'/members').set(members).then(()=> {
+          db.ref('groupIndex/'+uid+'/group_'+gid).set({ title: g.name, pfp: g.pfp||'', lastTime: Date.now() });
+          alert('Added');
+          if(currentChat === 'group_'+gid) renderMembers(members);
+        });
+      });
+    });
+  };
+
+  /* --------- quick menu (top-right) --------- */
+  function showQuickMenu(){
+    const html = `<div style="display:flex;flex-direction:column;gap:8px"><button onclick="promptNewDM()">New DM</button><button onclick="promptNewGroup()">New Group</button><button onclick="openMyProfile()">My Profile</button></div>`;
+    showOverlay(html);
+  }
+
+  /* --------- helpers: show my profile quickly --------- */
+  function openMyProfile(){ openProfile(me.uid); }
+
+  /* --------- window unload: mark offline --------- */
+  window.addEventListener('beforeunload', ()=> {
+    if(me) try{ db.ref('users/'+me.uid+'/status').set('offline'); } catch(e){}
+  });
+
+  /* ====== End script ====== */
+  </script>
+</body>
+</html>
